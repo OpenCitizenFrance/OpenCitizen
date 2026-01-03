@@ -1,0 +1,339 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+  accounts      Account[]
+  sessions      Session[]
+  
+  // Custom fields
+  constituencyCode String? // e.g. "75-01"
+  followedDeputies Deputy[]
+  bookmarkedLaws   Law[]
+  
+  // Causes
+  createdCauses    Cause[]           @relation("CreatedCauses")
+  joinedCauses     CauseMember[]
+  actionCompletions ActionCompletion[]
+  
+  // Preferences
+  alertPreference  AlertPreference?
+  subscription     Subscription?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Account {
+  id                 String  @id @default(cuid())
+  userId             String
+  type               String
+  provider           String
+  providerAccountId  String
+  refresh_token      String? @db.Text
+  access_token       String? @db.Text
+  expires_at         Int?
+  token_type         String?
+  scope              String?
+  id_token           String? @db.Text
+  session_state      String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model Deputy {
+  uid         String   @id // PA...
+  firstName   String
+  lastName    String
+  slug        String   @unique
+  imageUrl    String?
+  
+  // Relations
+  mandates       Mandate[]
+  votes          VoteDetail[]
+  amendments     Amendment[]
+  followedBy     User[]
+  targetedByCauses CauseDeputy[]
+
+  @@index([lastName])
+}
+
+model Group {
+  uid         String   @id // PO...
+  name        String
+  acronym     String?
+  colorCode   String?
+  
+  mandates    Mandate[]
+}
+
+model Mandate {
+  uid         String   @id // PM...
+  startDate   DateTime
+  endDate     DateTime?
+  
+  deputyId    String
+  deputy      Deputy   @relation(fields: [deputyId], references: [uid])
+  
+  groupId     String?
+  group       Group?   @relation(fields: [groupId], references: [uid])
+  
+  organId     String? // If not a group (e.g. commission)
+  
+  @@index([deputyId])
+  @@index([groupId])
+}
+
+model Law {
+  uid         String   @id // Dossier ID
+  title       String
+  status      String?
+  
+  amendments       Amendment[]
+  votes            Vote[]
+  bookmarkedBy     User[]
+  targetedByCauses CauseLaw[]
+}
+
+model Vote {
+  uid         String   @id // Scrutin ID
+  date        DateTime
+  title       String
+  voteType    String?  // Solennel, Public
+  result      String?  // Adopté, Rejeté
+  
+  totalPour   Int      @default(0)
+  totalContre Int      @default(0)
+  totalAbst   Int      @default(0)
+  
+  lawId       String?
+  law         Law?     @relation(fields: [lawId], references: [uid])
+  
+  voteDetails VoteDetail[]
+}
+
+enum Position {
+  POUR
+  CONTRE
+  ABSTENTION
+  NON_VOTANT
+}
+
+model VoteDetail {
+  id          String   @id @default(cuid())
+  position    Position
+  
+  voteId      String
+  vote        Vote     @relation(fields: [voteId], references: [uid])
+  
+  deputyId    String
+  deputy      Deputy   @relation(fields: [deputyId], references: [uid])
+  
+  @@unique([voteId, deputyId])
+}
+
+model Amendment {
+  uid         String   @id
+  content     String   @db.Text
+  expose      String?  @db.Text
+  
+  aiSummary   Json?    // Structured summary
+  status      String?
+  
+  lawId       String?
+  law         Law?     @relation(fields: [lawId], references: [uid])
+  
+  authorId    String
+  author      Deputy   @relation(fields: [authorId], references: [uid])
+}
+
+// ============================================
+// CAUSES CITOYENNES
+// ============================================
+
+model Cause {
+  id          String      @id @default(cuid())
+  title       String
+  description String      @db.Text
+  slug        String      @unique
+  imageUrl    String?
+  status      CauseStatus @default(ACTIVE)
+  
+  // Créateur
+  creatorId   String
+  creator     User        @relation("CreatedCauses", fields: [creatorId], references: [id])
+  
+  // Membres (many-to-many)
+  members     CauseMember[]
+  
+  // Cibles
+  targetDeputies CauseDeputy[]
+  targetLaws     CauseLaw[]
+  
+  // Actions
+  actions     CauseAction[]
+  
+  // Métriques
+  memberCount Int         @default(0)
+  
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  
+  @@index([status])
+  @@index([creatorId])
+}
+
+enum CauseStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+  WON
+}
+
+// Junction table for Cause members
+model CauseMember {
+  id        String   @id @default(cuid())
+  causeId   String
+  cause     Cause    @relation(fields: [causeId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  joinedAt  DateTime @default(now())
+  
+  @@unique([causeId, userId])
+}
+
+// Junction table for Cause target deputies
+model CauseDeputy {
+  id        String @id @default(cuid())
+  causeId   String
+  cause     Cause  @relation(fields: [causeId], references: [id], onDelete: Cascade)
+  deputyId  String
+  deputy    Deputy @relation(fields: [deputyId], references: [uid])
+  
+  @@unique([causeId, deputyId])
+}
+
+// Junction table for Cause target laws
+model CauseLaw {
+  id      String @id @default(cuid())
+  causeId String
+  cause   Cause  @relation(fields: [causeId], references: [id], onDelete: Cascade)
+  lawId   String
+  law     Law    @relation(fields: [lawId], references: [uid])
+  
+  @@unique([causeId, lawId])
+}
+
+model CauseAction {
+  id          String     @id @default(cuid())
+  causeId     String
+  cause       Cause      @relation(fields: [causeId], references: [id], onDelete: Cascade)
+  
+  type        ActionType
+  title       String
+  description String?    @db.Text
+  targetDate  DateTime?
+  
+  // Tracking completions
+  completions ActionCompletion[]
+  
+  createdAt   DateTime   @default(now())
+}
+
+enum ActionType {
+  EMAIL_DEPUTY
+  SOCIAL_SHARE
+  PETITION_SIGN
+  ATTEND_EVENT
+  CUSTOM
+}
+
+model ActionCompletion {
+  id        String      @id @default(cuid())
+  actionId  String
+  action    CauseAction @relation(fields: [actionId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  completedAt DateTime  @default(now())
+  
+  @@unique([actionId, userId])
+}
+
+// ============================================
+// ALERTES & PRÉFÉRENCES
+// ============================================
+
+model AlertPreference {
+  id        String  @id @default(cuid())
+  userId    String  @unique
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  // Types d'alertes
+  newVoteByFollowed Boolean @default(true)
+  newAmendment      Boolean @default(false)
+  causeUpdate       Boolean @default(true)
+  weeklyDigest      Boolean @default(true)
+  
+  // Canaux
+  emailEnabled      Boolean @default(true)
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ============================================
+// ABONNEMENTS PREMIUM
+// ============================================
+
+model Subscription {
+  id        String           @id @default(cuid())
+  userId    String           @unique
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  tier      SubscriptionTier @default(FREE)
+  
+  // Stripe (future)
+  stripeCustomerId     String?
+  stripeSubscriptionId String?
+  
+  // Limites
+  aiCallsToday    Int      @default(0)
+  aiCallsResetAt  DateTime @default(now())
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum SubscriptionTier {
+  FREE
+  PREMIUM
+}
+
