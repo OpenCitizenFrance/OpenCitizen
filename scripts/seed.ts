@@ -106,15 +106,17 @@ async function main() {
                     if (!firstName || !lastName) continue;
 
                     const slug = `${firstName}-${lastName}`.toLowerCase().replace(/ /g, '-').replace(/[^a-z0-9-]/g, '');
+                    const imageUrl = `https://www.assemblee-nationale.fr/dyn/deputes/${uid}/image`;
 
                     await prisma.deputy.upsert({
                         where: { uid: uid },
-                        update: { firstName, lastName },
+                        update: { firstName, lastName, imageUrl },
                         create: {
                             uid,
                             firstName,
                             lastName,
-                            slug: slug + '-' + uid
+                            slug: slug + '-' + uid,
+                            imageUrl
                         }
                     });
                     deputyCount++;
