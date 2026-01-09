@@ -1,145 +1,281 @@
-import { getDeputies, getGroups } from "@/lib/deputies";
-import { Card, CardContent } from "@/components/ui/card";
+import { getDeputies, getGroups, getCommissions, getGeoData } from "@/lib/deputies";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Search, Users, Filter } from "lucide-react";
+import { Search, Users, Filter, FileText, Layout, SortAsc, TrendingUp, MapPin, Globe } from "lucide-react";
 import Link from "next/link";
+import { InfiniteDeputiesGrid } from "./InfiniteDeputiesGrid";
+
+const INITIAL_LOAD = 24;
 
 export const dynamic = 'force-dynamic';
 
 export default async function DeputiesPage({
   searchParams
 }: {
-  searchParams: { q?: string; groupe?: string }
+  searchParams: { q?: string; groupe?: string; commission?: string; sort?: string; statut?: string; region?: string; department?: string }
 }) {
-  const [deputies, groups] = await Promise.all([
+  const sortBy = (searchParams.sort || 'alphabetical') as any;
+  const activeOnly = searchParams.statut !== 'tous';
+
+  const [{ deputies, total }, groups, commissions, geoData] = await Promise.all([
     getDeputies({
       search: searchParams.q,
-      groupId: searchParams.groupe
+      groupId: searchParams.groupe,
+      commissionId: searchParams.commission,
+      sortBy: sortBy,
+      activeOnly: activeOnly,
+      region: searchParams.region,
+      department: searchParams.department,
+      limit: INITIAL_LOAD,
+      offset: 0
     }),
-    getGroups()
+    getGroups(),
+    getCommissions(),
+    getGeoData()
   ]);
 
-  // Sort groups by member count
-  const sortedGroups = groups.sort((a, b) => (b._count?.mandates || 0) - (a._count?.mandates || 0));
+  const selectedRegionData = geoData.find(r => r.name === searchParams.region);
+
+  const sortedGroups = (groups as any[]).sort((a, b) => (b._count?.mandates || 0) - (a._count?.mandates || 0));
+  const majorityGroups = sortedGroups.filter(g => g.isMajority);
+  const oppositionGroups = sortedGroups.filter(g => !g.isMajority);
+
+  const getQueryString = (overrides: Record<string, string | null>) => {
+    const params = new URLSearchParams();
+    if (searchParams.q) params.set('q', searchParams.q);
+    if (searchParams.groupe) params.set('groupe', searchParams.groupe);
+    if (searchParams.commission) params.set('commission', searchParams.commission);
+    if (searchParams.sort) params.set('sort', searchParams.sort);
+    if (searchParams.statut) params.set('statut', searchParams.statut);
+    if (searchParams.region) params.set('region', searchParams.region);
+    if (searchParams.department) params.set('department', searchParams.department);
+
+    Object.entries(overrides).forEach(([key, value]) => {
+      if (value === null) params.delete(key);
+      else params.set(key, value);
+    });
+    return params.toString();
+  };
 
   return (
-    <div className="space-y-8 animate-fade-in">
+    <div className="space-y-8 animate-fade-in pb-12">
       {/* Header */}
-      <div className="space-y-4">
-        <div className="flex items-center gap-3">
-          <div className="p-2.5 rounded-xl bg-primary/10">
-            <Users className="h-6 w-6 text-primary" />
+      <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
+        <div className="space-y-4">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 rounded-xl bg-primary/10">
+              <Users className="h-6 w-6 text-primary" />
+            </div>
+            <div>
+              <h1 className="text-3xl font-bold tracking-tight">Députés</h1>
+              <p className="text-muted-foreground">
+                {activeOnly ? `Les ${total} élus en poste` : `Les ${total} députés (actifs et anciens)`}
+              </p>
+            </div>
           </div>
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight">Députés</h1>
-            <p className="text-muted-foreground">
-              Les {deputies.length} élus de la 17ème législature
-            </p>
-          </div>
+        </div>
+
+        <div className="flex items-center gap-2 bg-muted/30 p-1 rounded-lg border overflow-x-auto scrollbar-none">
+          <Link href={`/deputies?${getQueryString({ sort: 'alphabetical' })}`}>
+            <Button variant={sortBy === 'alphabetical' ? "secondary" : "ghost"} size="sm" className="gap-2 shrink-0">
+              <SortAsc className="h-4 w-4" /> A-Z
+            </Button>
+          </Link>
+          <Link href={`/deputies?${getQueryString({ sort: 'adopted_amendments' })}`}>
+            <Button variant={sortBy === 'adopted_amendments' ? "secondary" : "ghost"} size="sm" className="gap-2 shrink-0">
+              <TrendingUp className="h-4 w-4" /> Adoptés
+            </Button>
+          </Link>
+          <Link href={`/deputies?${getQueryString({ sort: 'amendments' })}`}>
+            <Button variant={sortBy === 'amendments' ? "secondary" : "ghost"} size="sm" className="gap-2 shrink-0">
+              <FileText className="h-4 w-4" /> Total
+            </Button>
+          </Link>
+          <Link href={`/deputies?${getQueryString({ sort: 'propositions' })}`}>
+            <Button variant={sortBy === 'propositions' ? "secondary" : "ghost"} size="sm" className="gap-2 shrink-0">
+              <Layout className="h-4 w-4" /> PPL
+            </Button>
+          </Link>
         </div>
       </div>
 
       {/* Filters */}
-      <div className="space-y-4">
-        <form action="/deputies" method="GET" className="relative max-w-md">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            name="q"
-            defaultValue={searchParams.q}
-            placeholder="Rechercher par nom..."
-            className="pl-10 h-11"
-          />
-          {searchParams.groupe && (
-            <input type="hidden" name="groupe" value={searchParams.groupe} />
-          )}
-        </form>
+      <div className="space-y-6 bg-muted/30 p-6 rounded-2xl border">
+        <div className="flex flex-col md:flex-row gap-4 items-center">
+          <form action="/deputies" method="GET" className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              name="q"
+              defaultValue={searchParams.q}
+              placeholder="Rechercher par nom..."
+              className="pl-10 h-11 bg-background"
+            />
+            {searchParams.groupe && <input type="hidden" name="groupe" value={searchParams.groupe} />}
+            {searchParams.commission && <input type="hidden" name="commission" value={searchParams.commission} />}
+            {searchParams.sort && <input type="hidden" name="sort" value={searchParams.sort} />}
+            {searchParams.statut && <input type="hidden" name="statut" value={searchParams.statut} />}
+          </form>
 
-        <div className="flex items-center gap-2 flex-wrap">
-          <div className="flex items-center gap-2 text-sm text-muted-foreground mr-2">
-            <Filter className="h-4 w-4" />
-            Groupes:
+          <div className="flex items-center gap-2 bg-background p-1 rounded-lg border shrink-0">
+            <Link href={`/deputies?${getQueryString({ statut: null })}`}>
+              <Button variant={activeOnly ? "secondary" : "ghost"} size="sm" className="px-4">En poste</Button>
+            </Link>
+            <Link href={`/deputies?${getQueryString({ statut: 'tous' })}`}>
+              <Button variant={!activeOnly ? "secondary" : "ghost"} size="sm" className="px-4">Tous</Button>
+            </Link>
           </div>
-          <Link href="/deputies">
-            <Badge
-              variant={!searchParams.groupe ? "default" : "outline"}
-              className="cursor-pointer hover:bg-primary/90 transition-colors"
-            >
-              Tous
-            </Badge>
-          </Link>
-          {sortedGroups.slice(0, 8).map((group) => (
-            <Link
-              key={group.uid}
-              href={`/deputies?groupe=${group.uid}${searchParams.q ? `&q=${searchParams.q}` : ''}`}
-            >
+        </div>
+
+        <div className="space-y-4">
+          <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-none">
+            <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground mr-2 shrink-0">
+              <Filter className="h-4 w-4" />
+              Groupes:
+            </div>
+            <Link href={`/deputies?${getQueryString({ groupe: null })}`}>
               <Badge
-                variant={searchParams.groupe === group.uid ? "default" : "outline"}
-                className="cursor-pointer transition-all hover:scale-105"
-                style={searchParams.groupe === group.uid && group.colorCode ? {
-                  backgroundColor: group.colorCode,
-                  borderColor: group.colorCode
-                } : group.colorCode ? {
-                  borderColor: group.colorCode,
-                  color: group.colorCode
-                } : {}}
+                variant={!searchParams.groupe ? "default" : "outline"}
+                className="cursor-pointer rounded-full px-4 py-1.5 min-h-[36px] flex items-center"
               >
-                {group.acronym || group.name.substring(0, 15)}
+                Tous
               </Badge>
             </Link>
-          ))}
-        </div>
-      </div>
-
-      {/* Results Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 stagger-children">
-        {deputies.map((deputy) => (
-          <Link key={deputy.uid} href={`/deputies/${deputy.slug}`}>
-            <Card className="card-hover group h-full">
-              <CardContent className="p-4">
-                <div className="flex items-center gap-4">
-                  <Avatar className="h-14 w-14 ring-2 ring-background shadow-md group-hover:ring-primary/20 transition-all">
-                    <AvatarImage src={deputy.imageUrl || ""} alt={`${deputy.firstName} ${deputy.lastName}`} />
-                    <AvatarFallback className="bg-gradient-to-br from-primary/20 to-accent/20 text-lg font-semibold">
-                      {deputy.firstName[0]}{deputy.lastName[0]}
-                    </AvatarFallback>
-                  </Avatar>
-                  <div className="flex-1 min-w-0">
-                    <p className="font-semibold truncate group-hover:text-primary transition-colors">
-                      {deputy.firstName} {deputy.lastName}
-                    </p>
-                    <Badge
-                      variant="secondary"
-                      className="mt-1 text-xs"
-                      style={deputy.currentGroup?.colorCode ? {
-                        backgroundColor: `${deputy.currentGroup.colorCode}20`,
-                        color: deputy.currentGroup.colorCode,
-                        borderColor: `${deputy.currentGroup.colorCode}40`
-                      } : {}}
-                    >
-                      {deputy.currentGroup?.acronym || deputy.currentGroup?.name || "Non inscrit"}
-                    </Badge>
-                    <div className="flex gap-2 mt-2 text-xs text-muted-foreground">
-                      <span>{deputy.voteCount} votes</span>
-                    </div>
+            {sortedGroups.map((group) => (
+              <Link
+                key={group.uid}
+                href={`/deputies?${getQueryString({ groupe: group.uid })}`}
+              >
+                <Badge
+                  variant={searchParams.groupe === group.uid ? "default" : "outline"}
+                  className="cursor-pointer transition-all hover:scale-105 rounded-full px-4 py-1.5 min-h-[36px] flex items-center font-normal"
+                  style={searchParams.groupe === group.uid && group.colorCode ? {
+                    backgroundColor: group.colorCode,
+                    borderColor: group.colorCode
+                  } : group.colorCode ? {
+                    borderColor: group.colorCode,
+                    color: group.colorCode
+                  } : {}}
+                >
+                  <div className="flex items-center gap-1.5">
+                    {group.logoUrl && (
+                      <img src={group.logoUrl} alt="" className="h-3 w-3 object-contain"
+                        style={searchParams.groupe === group.uid ? { filter: 'brightness(0) invert(1)' } : {}} />
+                    )}
+                    {group.acronym || group.name}
                   </div>
-                </div>
-              </CardContent>
-            </Card>
-          </Link>
-        ))}
+                </Badge>
+              </Link>
+            ))}
+          </div>
+
+          <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-none">
+            <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground mr-2 shrink-0">
+              <Globe className="h-4 w-4" />
+              Régions:
+            </div>
+            <Link href={`/deputies?${getQueryString({ region: null, department: null })}`}>
+              <Badge
+                variant={!searchParams.region ? "default" : "outline"}
+                className="cursor-pointer rounded-full px-4 py-1.5 min-h-[36px] flex items-center"
+              >
+                Toutes
+              </Badge>
+            </Link>
+            {geoData.map((region) => (
+              <Link
+                key={region.name}
+                href={`/deputies?${getQueryString({ region: region.name, department: null })}`}
+              >
+                <Badge
+                  variant={searchParams.region === region.name ? "default" : "outline"}
+                  className="cursor-pointer transition-all hover:scale-105 rounded-full px-4 py-1.5 min-h-[36px] flex items-center font-normal whitespace-nowrap"
+                >
+                  {region.name}
+                </Badge>
+              </Link>
+            ))}
+          </div>
+
+          {searchParams.region && selectedRegionData && (
+            <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-none animate-in fade-in slide-in-from-left-2 duration-300">
+              <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground mr-2 shrink-0">
+                <MapPin className="h-4 w-4" />
+                Départements:
+              </div>
+              <Link href={`/deputies?${getQueryString({ department: null })}`}>
+                <Badge
+                  variant={!searchParams.department ? "default" : "outline"}
+                  className="cursor-pointer rounded-full px-4 py-1.5 min-h-[36px] flex items-center"
+                >
+                  Tous
+                </Badge>
+              </Link>
+              {selectedRegionData.departments.map((dept) => (
+                <Link
+                  key={dept.name}
+                  href={`/deputies?${getQueryString({ department: dept.name })}`}
+                >
+                  <Badge
+                    variant={searchParams.department === dept.name ? "default" : "outline"}
+                    className="cursor-pointer transition-all hover:scale-105 rounded-full px-4 py-1.5 min-h-[36px] flex items-center font-normal whitespace-nowrap"
+                  >
+                    {dept.name} ({dept.code})
+                  </Badge>
+                </Link>
+              ))}
+            </div>
+          )}
+
+          <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-none">
+            <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground mr-2 shrink-0">
+              <Layout className="h-4 w-4" />
+              Commissions:
+            </div>
+            <Link href={`/deputies?${getQueryString({ commission: null })}`}>
+              <Badge
+                variant={!searchParams.commission ? "default" : "outline"}
+                className="cursor-pointer rounded-full px-4 py-1.5 min-h-[36px] flex items-center"
+              >
+                Toutes
+              </Badge>
+            </Link>
+            {commissions.map((comm: any) => (
+              <Link
+                key={comm.uid}
+                href={`/deputies?${getQueryString({ commission: comm.uid })}`}
+              >
+                <Badge
+                  variant={searchParams.commission === comm.uid ? "default" : "outline"}
+                  className="cursor-pointer transition-all hover:scale-105 rounded-full px-4 py-1.5 min-h-[36px] flex items-center font-normal whitespace-nowrap"
+                >
+                  {comm.acronym || comm.name}
+                </Badge>
+              </Link>
+            ))}
+          </div>
+
+        </div>
       </div>
 
-      {deputies.length === 0 && (
-        <div className="text-center py-16">
+      {/* Results Grid with Infinite Scroll */}
+      {deputies.length === 0 ? (
+        <div className="text-center py-24 bg-muted/20 rounded-3xl border border-dashed">
           <Users className="h-16 w-16 mx-auto mb-4 text-muted-foreground/30" />
-          <h3 className="text-lg font-medium mb-2">Aucun député trouvé</h3>
-          <p className="text-muted-foreground">
-            Essayez de modifier vos critères de recherche
+          <h3 className="text-xl font-semibold mb-2">Aucun député trouvé</h3>
+          <p className="text-muted-foreground max-w-sm mx-auto">
+            Nous n'avons trouvé aucun député correspondant à vos critères de recherche.
           </p>
+          <Link href="/deputies" className="mt-6 inline-block">
+            <Button variant="secondary">Réinitialiser les filtres</Button>
+          </Link>
         </div>
+      ) : (
+        <InfiniteDeputiesGrid
+          initialDeputies={deputies}
+          total={total}
+          filters={searchParams}
+        />
       )}
     </div>
   );

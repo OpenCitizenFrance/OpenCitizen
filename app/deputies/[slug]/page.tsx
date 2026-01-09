@@ -4,8 +4,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Heart, Vote, FileText, Users, ArrowLeft, TrendingUp, Award } from "lucide-react";
+import { Heart, Vote, FileText, Users, ArrowLeft, TrendingUp, Award, Mail, MapPin, Calendar } from "lucide-react";
 import Link from "next/link";
+import { auth } from "@/auth";
+import { prisma } from "@/lib/db";
+import { FollowButton } from "@/components/FollowButton";
+import { CommentSection } from "@/components/CommentSection";
+import { MailtoButton } from "@/components/MailtoButton";
 
 export const dynamic = 'force-dynamic';
 
@@ -14,11 +19,40 @@ interface PageProps {
 }
 
 export default async function DeputyProfilePage({ params }: PageProps) {
-    const deputy = await getDeputyBySlug(params.slug);
+    const deputyData = await getDeputyBySlug(params.slug);
 
-    if (!deputy) {
+    if (!deputyData) {
         notFound();
     }
+
+    // Type cast to access identity fields added to schema
+    const deputy = deputyData as typeof deputyData & {
+        civilite?: string | null;
+        dateNaissance?: Date | null;
+        villeNaissance?: string | null;
+        email?: string | null;
+        circonscription?: string | null;
+    };
+
+    const session = await auth();
+    const userId = session?.user?.id;
+    let isFollowing = false;
+    let comments: any[] = [];
+
+    if (userId) {
+        const user = await prisma.user.findUnique({
+            where: { id: userId },
+            select: { followedDeputies: { where: { uid: deputy.uid } } }
+        });
+        isFollowing = (user?.followedDeputies.length ?? 0) > 0;
+    }
+
+    // Fetch comments
+    comments = await prisma.comment.findMany({
+        where: { deputyId: deputy.uid },
+        include: { author: { select: { name: true, image: true } } },
+        orderBy: { createdAt: 'desc' }
+    });
 
     const positionStyles: Record<string, string> = {
         'POUR': 'badge-pour',
@@ -64,20 +98,55 @@ export default async function DeputyProfilePage({ params }: PageProps) {
                                 {deputy.uid}
                             </Badge>
                         </div>
+
+                        {/* Identity Info */}
+                        <div className="flex flex-wrap items-center gap-4 text-sm text-muted-foreground">
+                            {deputy.circonscription && (
+                                <span className="flex items-center gap-1.5">
+                                    <MapPin className="h-4 w-4" />
+                                    {deputy.circonscription}
+                                </span>
+                            )}
+                            {deputy.dateNaissance && (
+                                <span className="flex items-center gap-1.5">
+                                    <Calendar className="h-4 w-4" />
+                                    Né(e) le {new Date(deputy.dateNaissance).toLocaleDateString('fr-FR', {
+                                        day: 'numeric',
+                                        month: 'long',
+                                        year: 'numeric'
+                                    })}
+                                    {deputy.villeNaissance && ` à ${deputy.villeNaissance}`}
+                                </span>
+                            )}
+                        </div>
+
                         <p className="text-muted-foreground">
-                            Député de la 17ème législature
+                            {deputy.civilite ? `${deputy.civilite} ` : ''}Député de la 17ème législature
                         </p>
-                        <div className="flex gap-2 pt-2">
-                            <Button className="gap-2 shadow-lg shadow-primary/25">
-                                <Heart className="h-4 w-4" />
-                                Suivre
-                            </Button>
+
+                        <div className="flex flex-wrap gap-2 pt-2">
+                            <FollowButton
+                                targetId={deputy.uid}
+                                targetType="deputy"
+                                isFollowing={isFollowing}
+                                className="shadow-lg shadow-primary/25"
+                            />
                             <Link href={`/deputies/comparer?ids=${deputy.uid}`}>
                                 <Button variant="outline" className="gap-2">
                                     <Users className="h-4 w-4" />
                                     Comparer
                                 </Button>
                             </Link>
+                            {deputy.email && (
+                                <MailtoButton
+                                    to={deputy.email}
+                                    subject={`Question citoyenne - ${deputy.firstName} ${deputy.lastName}`}
+                                    body={`Madame/Monsieur le Député ${deputy.lastName},\n\nJe me permets de vous écrire en tant que citoyen(ne) de votre circonscription.\n\n[Votre message ici]\n\nCordialement,\n[Votre nom]`}
+                                    deputyName={`${deputy.civilite || ''} ${deputy.lastName}`.trim()}
+                                    variant="outline"
+                                    showCopyOption={false}
+                                />
+                            )}
                         </div>
                     </div>
                 </div>
@@ -201,39 +270,131 @@ export default async function DeputyProfilePage({ params }: PageProps) {
                 </CardContent>
             </Card>
 
-            {/* Amendments */}
-            {deputy.amendments.length > 0 && (
+            {/* Amendments by Dossier */}
+            {deputy.amendmentsByDossier && deputy.amendmentsByDossier.length > 0 && (
                 <Card>
                     <CardHeader className="border-b bg-muted/30">
-                        <CardTitle className="flex items-center gap-2">
-                            <FileText className="h-5 w-5 text-accent" />
-                            Amendements récents
-                        </CardTitle>
-                    </CardHeader>
-                    <CardContent className="p-0 divide-y">
-                        {deputy.amendments.map((amendment) => (
-                            <div key={amendment.uid} className="p-4 hover:bg-muted/50 transition-colors">
-                                <div className="flex items-center justify-between gap-4">
-                                    <div className="flex-1 min-w-0">
-                                        <p className="font-medium">Amendement {amendment.uid}</p>
-                                        {amendment.law && (
-                                            <p className="text-sm text-muted-foreground truncate mt-0.5">
-                                                {amendment.law.title}
-                                            </p>
-                                        )}
-                                    </div>
-                                    <Badge variant={
-                                        amendment.status === 'Adopté' ? 'default' :
-                                            amendment.status === 'Rejeté' ? 'destructive' : 'secondary'
-                                    }>
-                                        {amendment.status || 'En cours'}
-                                    </Badge>
-                                </div>
+                        <div className="flex items-center justify-between">
+                            <CardTitle className="flex items-center gap-2">
+                                <FileText className="h-5 w-5 text-accent" />
+                                Amendements par dossier législatif
+                            </CardTitle>
+                            <div className="flex gap-2 text-sm">
+                                <Badge variant="default" className="gap-1">
+                                    {deputy.stats.adoptedAmendments} adoptés
+                                </Badge>
+                                <Badge variant="destructive" className="gap-1">
+                                    {deputy.stats.rejectedAmendments} rejetés
+                                </Badge>
                             </div>
-                        ))}
+                        </div>
+                        <CardDescription>
+                            {deputy.stats.totalAmendments} amendements déposés sur {deputy.amendmentsByDossier.length} dossier{deputy.amendmentsByDossier.length > 1 ? 's' : ''}
+                        </CardDescription>
+                    </CardHeader>
+                    <CardContent className="p-0">
+                        <div className="divide-y">
+                            {deputy.amendmentsByDossier.map((dossierGroup, index) => (
+                                <details
+                                    key={dossierGroup.dossier?.uid || `no-dossier-${index}`}
+                                    className="group"
+                                    open={index === 0}
+                                >
+                                    <summary className="flex items-center justify-between p-4 cursor-pointer hover:bg-muted/50 transition-colors list-none">
+                                        <div className="flex items-center gap-3">
+                                            <div className="p-2 rounded-lg bg-accent/10 group-open:bg-accent/20 transition-colors">
+                                                <FileText className="h-4 w-4 text-accent" />
+                                            </div>
+                                            <div>
+                                                <p className="font-medium">
+                                                    {dossierGroup.dossier?.displayTitle || dossierGroup.dossier?.reference || 'Dossier non identifié'}
+                                                </p>
+                                                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                                                    <span>{dossierGroup.amendments.length} amendement{dossierGroup.amendments.length > 1 ? 's' : ''}</span>
+                                                    {dossierGroup.dossier?.typeLabel && (
+                                                        <Badge variant="outline" className="text-xs py-0">
+                                                            {dossierGroup.dossier.typeLabel}
+                                                        </Badge>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            {/* Status summary for this dossier */}
+                                            {(() => {
+                                                const adopted = dossierGroup.amendments.filter(a => a.status === 'Adopté').length;
+                                                const rejected = dossierGroup.amendments.filter(a => a.status === 'Rejeté').length;
+                                                return (
+                                                    <div className="flex gap-1 text-xs">
+                                                        {adopted > 0 && (
+                                                            <span className="px-2 py-0.5 rounded-full bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">
+                                                                {adopted} ✓
+                                                            </span>
+                                                        )}
+                                                        {rejected > 0 && (
+                                                            <span className="px-2 py-0.5 rounded-full bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400">
+                                                                {rejected} ✗
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                );
+                                            })()}
+                                            <svg
+                                                className="h-5 w-5 text-muted-foreground transition-transform group-open:rotate-180"
+                                                fill="none"
+                                                viewBox="0 0 24 24"
+                                                stroke="currentColor"
+                                            >
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                            </svg>
+                                        </div>
+                                    </summary>
+                                    <div className="border-t bg-muted/20">
+                                        {dossierGroup.amendments.map((amendment) => (
+                                            <div
+                                                key={amendment.uid}
+                                                className="flex items-center justify-between gap-4 px-4 py-3 pl-14 hover:bg-muted/30 transition-colors border-b border-border/50 last:border-0"
+                                            >
+                                                <div className="flex-1 min-w-0">
+                                                    <p className="font-medium text-sm">
+                                                        Amendement {amendment.shortUid}
+                                                    </p>
+                                                    {amendment.content && (
+                                                        <p className="text-xs text-muted-foreground truncate mt-0.5">
+                                                            {amendment.content}
+                                                        </p>
+                                                    )}
+                                                </div>
+                                                <Badge
+                                                    variant={
+                                                        amendment.status === 'Adopté' ? 'default' :
+                                                            amendment.status === 'Rejeté' ? 'destructive' : 'secondary'
+                                                    }
+                                                    className="shrink-0"
+                                                >
+                                                    {amendment.status || 'En cours'}
+                                                </Badge>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </details>
+                            ))}
+                        </div>
                     </CardContent>
                 </Card>
             )}
+
+            {/* Comments Section */}
+            <div className="mt-12 max-w-3xl">
+                <CommentSection
+                    targetId={deputy.uid}
+                    targetType="deputy"
+                    comments={comments as any}
+                    currentUser={session?.user}
+                />
+            </div>
+
+            <div className="h-12"></div>
         </div>
     );
 }
