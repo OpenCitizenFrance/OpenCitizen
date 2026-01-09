@@ -174,3 +174,67 @@
 .stagger-children > *:nth-child(4) { animation-delay: 150ms; }
 .stagger-children > *:nth-child(5) { animation-delay: 200ms; }
 .stagger-children > *:nth-child(6) { animation-delay: 250ms; }
+
+/* ========== SCROLLYTELLING STYLES ========== */
+
+/* Premium dark mode scrollbar for landing */
+.dark::-webkit-scrollbar-track {
+  background: rgba(10, 10, 10, 0.8);
+}
+
+.dark::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+}
+
+.dark::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+/* Scrollytelling typography */
+.scrolly-title {
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+
+.scrolly-description {
+  font-weight: 400;
+  letter-spacing: 0.01em;
+  line-height: 1.6;
+}
+
+/* Tricolore gradient for CTA buttons */
+.tricolore-gradient {
+  background: linear-gradient(135deg, #2563eb 0%, #ffffff 50%, #dc2626 100%);
+}
+
+/* Smooth canvas rendering */
+canvas {
+  image-rendering: -webkit-optimize-contrast;
+  image-rendering: crisp-edges;
+}
+
+/* Hide scrollbar during loading */
+.loading-state {
+  overflow: hidden;
+}
+
+/* Premium text shadows */
+.text-shadow-hero {
+  text-shadow: 0 2px 20px rgba(0, 0, 0, 0.5);
+}
+
+.text-shadow-subtle {
+  text-shadow: 0 1px 10px rgba(0, 0, 0, 0.5);
+}
+
+/* Spinner animation for loader */
+@keyframes spin-slow {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.animate-spin-slow {
+  animation: spin-slow 1.5s linear infinite;
+}

@@ -1,11 +1,15 @@
+"use client";
+
 import Link from "next/link";
+import { useSession, SessionProvider } from "next-auth/react";
+import { usePathname } from "next/navigation";
 import { Sidebar } from "./Sidebar";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
-import { Menu, LogOut, Settings } from "lucide-react";
+import { Menu, LogOut, Settings, User } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { GlobalSearch } from "./GlobalSearch";
-import { auth, signOut } from "@/auth";
+import { signOut } from "next-auth/react";
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -15,8 +19,27 @@ import {
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-export async function Navbar() {
-    const session = await auth();
+// Routes that should show the full app layout with sidebar
+const appRoutes = [
+    "/deputies",
+    "/groupes",
+    "/textes",
+    "/commissions",
+    "/causes",
+    "/dossiers",
+    "/messages",
+];
+
+// Routes that should show a minimal layout (no sidebar, no navbar)
+const minimalRoutes = [
+    "/auth/signin",
+    "/auth/signup",
+    "/auth/forgot-password",
+    "/auth/reset-password",
+];
+
+function NavbarContent() {
+    const { data: session } = useSession();
     const user = session?.user;
 
     return (
@@ -32,10 +55,7 @@ export async function Navbar() {
                         <Sidebar className="w-full border-r-0 block" />
                     </SheetContent>
                 </Sheet>
-                <div className="ml-4 flex items-center md:ml-0 gap-4 w-full justify-between">
-                    <div className="font-bold text-xl bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
-                        OpenCitizen
-                    </div>
+                <div className="ml-4 flex items-center md:ml-6 gap-4 w-full">
 
                     <div className="flex items-center gap-4 flex-1 justify-end">
                         <GlobalSearch />
@@ -62,31 +82,26 @@ export async function Navbar() {
                                         </div>
                                     </DropdownMenuLabel>
                                     <DropdownMenuSeparator />
-                                    <Link href="/groupes/dashboard">
-                                        <DropdownMenuItem className="cursor-pointer">
+                                    <DropdownMenuItem className="cursor-pointer" asChild>
+                                        <Link href="/groupes/dashboard">
+                                            <User className="mr-2 h-4 w-4" />
                                             Mon espace
-                                        </DropdownMenuItem>
-                                    </Link>
-                                    <Link href="/groupes/dashboard/parametres">
-                                        <DropdownMenuItem className="cursor-pointer">
+                                        </Link>
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem className="cursor-pointer" asChild>
+                                        <Link href="/groupes/dashboard/parametres">
                                             <Settings className="mr-2 h-4 w-4" />
                                             Paramètres
-                                        </DropdownMenuItem>
-                                    </Link>
+                                        </Link>
+                                    </DropdownMenuItem>
                                     <DropdownMenuSeparator />
-                                    <form
-                                        action={async () => {
-                                            "use server";
-                                            await signOut({ redirectTo: "/" });
-                                        }}
+                                    <DropdownMenuItem
+                                        className="cursor-pointer text-destructive focus:text-destructive"
+                                        onClick={() => signOut({ callbackUrl: "/" })}
                                     >
-                                        <button type="submit" className="w-full">
-                                            <DropdownMenuItem className="cursor-pointer text-destructive focus:text-destructive">
-                                                <LogOut className="mr-2 h-4 w-4" />
-                                                Se déconnecter
-                                            </DropdownMenuItem>
-                                        </button>
-                                    </form>
+                                        <LogOut className="mr-2 h-4 w-4" />
+                                        Se déconnecter
+                                    </DropdownMenuItem>
                                 </DropdownMenuContent>
                             </DropdownMenu>
                         ) : (
@@ -98,5 +113,57 @@ export async function Navbar() {
                 </div>
             </div>
         </div>
+    );
+}
+
+function AppShellContent({ children }: { children: React.ReactNode }) {
+    const pathname = usePathname();
+
+    // Check if current route is an app route (needs full layout)
+    const isAppRoute = appRoutes.some(route => pathname.startsWith(route));
+
+    // Check if current route is a minimal route (auth pages)
+    const isMinimalRoute = minimalRoutes.some(route => pathname.startsWith(route));
+
+    // Landing page (/) and other public pages - minimal layout without sidebar
+    const isLandingPage = pathname === "/";
+
+    // Auth pages - no layout at all
+    if (isMinimalRoute) {
+        return <>{children}</>;
+    }
+
+    // Landing page - just the content, no sidebar/navbar
+    if (isLandingPage) {
+        return (
+            <div className="min-h-screen bg-background">
+                {children}
+            </div>
+        );
+    }
+
+    // App pages - full layout with sidebar and navbar
+    return (
+        <div className="flex min-h-screen">
+            <Sidebar />
+            <div className="flex-1 flex flex-col min-w-0">
+                <NavbarContent />
+                <main className="flex-1 p-4 md:p-6 lg:p-8 overflow-auto">
+                    <div className="max-w-7xl mx-auto w-full">
+                        {children}
+                    </div>
+                </main>
+            </div>
+        </div>
+    );
+}
+
+export function AppShell({ children }: { children: React.ReactNode }) {
+    return (
+        <SessionProvider>
+            <AppShellContent>
+                {children}
+            </AppShellContent>
+        </SessionProvider>
     );
 }
