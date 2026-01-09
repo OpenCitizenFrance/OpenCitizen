@@ -1,10 +1,13 @@
-import { getGroupByUid } from "@/lib/groups";
+import { getGroupByUid, getGroupStats } from "@/lib/groups";
 import { notFound } from "next/navigation";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Users, Vote, ArrowLeft, TrendingUp, Award } from "lucide-react";
 import Link from "next/link";
+import { auth } from "@/auth";
+import { prisma } from "@/lib/db";
+import { FollowButton } from "@/components/FollowButton";
 
 export const dynamic = 'force-dynamic';
 
@@ -13,11 +16,27 @@ interface PageProps {
 }
 
 export default async function GroupeProfilePage({ params }: PageProps) {
-    const group = await getGroupByUid(params.uid);
+    const groupData = await getGroupByUid(params.uid);
+    const groupStats = await getGroupStats(params.uid);
 
-    if (!group) {
+    if (!groupData) {
         notFound();
     }
+
+    const group = { ...groupData, stats: groupStats };
+
+    const session = await auth();
+    const userId = session?.user?.id;
+    let isFollowing = false;
+
+    if (userId) {
+        const user = await prisma.user.findUnique({
+            where: { id: userId },
+            select: { followedGroups: { where: { uid: group.uid } } }
+        });
+        isFollowing = (user?.followedGroups.length ?? 0) > 0;
+    }
+
 
     return (
         <div className="space-y-8 animate-fade-in">
@@ -48,14 +67,23 @@ export default async function GroupeProfilePage({ params }: PageProps) {
                     <div className="flex-1">
                         <h1 className="text-3xl font-bold">{group.name}</h1>
                         <div className="flex items-center gap-4 mt-2 text-muted-foreground">
-                            <span className="flex items-center gap-1.5">
-                                <Users className="h-4 w-4" />
-                                {group.memberCount} membre{group.memberCount > 1 ? 's' : ''}
+                            <span className="flex items-center gap-4">
+                                <span className="flex items-center gap-1.5">
+                                    <Users className="h-4 w-4" />
+                                    {group.memberCount} membre{group.memberCount > 1 ? 's' : ''}
+                                </span>
+                                <FollowButton
+                                    targetId={group.uid}
+                                    targetType="group"
+                                    isFollowing={isFollowing}
+                                    variant="outline"
+                                    className="bg-white/10 hover:bg-white/20 border-white/20 text-white hover:text-white"
+                                />
                             </span>
                             {group.acronym && (
                                 <Badge
                                     variant="outline"
-                                    style={{ borderColor: group.colorCode, color: group.colorCode }}
+                                    style={{ borderColor: group.colorCode || 'currentColor', color: group.colorCode || 'currentColor' }}
                                 >
                                     {group.acronym}
                                 </Badge>
@@ -121,11 +149,65 @@ export default async function GroupeProfilePage({ params }: PageProps) {
                 </Card>
             </div>
 
+            {/* In-Depth Stats */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 stagger-children">
+                {/* Top Subjects */}
+                <Card>
+                    <CardHeader>
+                        <CardTitle className="flex items-center gap-2">
+                            <TrendingUp className="h-5 w-5 text-primary" />
+                            Sujets de prédilection
+                        </CardTitle>
+                        <CardDescription>
+                            Basé sur les amendements déposés
+                        </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                        <div className="flex flex-wrap gap-2">
+                            {group.stats.topSubjects.map((subject: any) => (
+                                <Badge key={subject.name} variant="secondary" className="text-sm py-1 px-3">
+                                    {subject.name} ({subject.count})
+                                </Badge>
+                            ))}
+                            {group.stats.topSubjects.length === 0 && (
+                                <p className="text-muted-foreground text-sm">Données insuffisantes</p>
+                            )}
+                        </div>
+                    </CardContent>
+                </Card>
+
+                {/* Top Laws */}
+                <Card>
+                    <CardHeader>
+                        <CardTitle className="flex items-center gap-2">
+                            <Vote className="h-5 w-5 text-primary" />
+                            Textes les plus amendés
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                        <div className="space-y-4">
+                            {group.stats.mostAmendedDossiers.map((law: any) => (
+                                <div key={law.uid} className="flex items-start justify-between gap-4 border-b pb-3 last:border-0 last:pb-0">
+                                    <div>
+                                        <p className="font-medium line-clamp-2">{law.title}</p>
+                                        <p className="text-xs text-muted-foreground mt-1">{law.uid}</p>
+                                    </div>
+                                    <Badge variant="outline">{law.amendmentCount}</Badge>
+                                </div>
+                            ))}
+                            {group.stats.mostAmendedDossiers.length === 0 && (
+                                <p className="text-muted-foreground text-sm">Aucun amendement trouvé</p>
+                            )}
+                        </div>
+                    </CardContent>
+                </Card>
+            </div>
+
             {/* Members List */}
             <Card>
                 <CardHeader className="border-b bg-muted/30">
                     <CardTitle className="flex items-center gap-2">
-                        <Users className="h-5 w-5" style={{ color: group.colorCode }} />
+                        <Users className="h-5 w-5" style={{ color: group.colorCode || 'currentColor' }} />
                         Membres du groupe
                     </CardTitle>
                     <CardDescription>

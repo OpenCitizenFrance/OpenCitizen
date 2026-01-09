@@ -3,6 +3,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Users, UsersRound } from "lucide-react";
 import Link from "next/link";
+import Image from "next/image";
+import { getGroupLogoUrl } from "@/lib/groupLogos";
 
 export const dynamic = 'force-dynamic';
 
@@ -29,47 +31,62 @@ export default async function GroupesPage() {
 
             {/* Groups Grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 stagger-children">
-                {sortedGroups.map((group) => (
-                    <Link key={group.uid} href={`/groupes/${group.uid}`}>
-                        <Card
-                            className="card-hover h-full group overflow-hidden"
-                        >
-                            <div
-                                className="h-2"
-                                style={{ backgroundColor: group.colorCode || 'hsl(var(--muted))' }}
-                            />
-                            <CardHeader className="pb-3">
-                                <div className="flex items-start justify-between gap-3">
-                                    <div
-                                        className="p-3 rounded-xl"
-                                        style={{
-                                            backgroundColor: group.colorCode ? `${group.colorCode}15` : 'hsl(var(--muted))'
-                                        }}
-                                    >
-                                        <span
-                                            className="text-lg font-bold"
-                                            style={{ color: group.colorCode || 'hsl(var(--foreground))' }}
+                {sortedGroups.map((group) => {
+                    const logoUrl = getGroupLogoUrl(group.acronym);
+
+                    return (
+                        <Link key={group.uid} href={`/groupes/${group.uid}`}>
+                            <Card
+                                className="card-hover h-full group overflow-hidden"
+                            >
+                                <div
+                                    className="h-2"
+                                    style={{ backgroundColor: group.colorCode || 'hsl(var(--muted))' }}
+                                />
+                                <CardHeader className="pb-3">
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div
+                                            className="p-3 rounded-xl flex items-center justify-center min-w-[60px] min-h-[60px]"
+                                            style={{
+                                                backgroundColor: group.colorCode ? `${group.colorCode}15` : 'hsl(var(--muted))'
+                                            }}
                                         >
-                                            {group.acronym || group.name.substring(0, 2)}
-                                        </span>
+                                            {logoUrl ? (
+                                                <Image
+                                                    src={logoUrl}
+                                                    alt={`Logo ${group.name}`}
+                                                    width={48}
+                                                    height={48}
+                                                    className="object-contain"
+                                                    unoptimized={logoUrl.endsWith('.svg')}
+                                                />
+                                            ) : (
+                                                <span
+                                                    className="text-lg font-bold"
+                                                    style={{ color: group.colorCode || 'hsl(var(--foreground))' }}
+                                                >
+                                                    {group.acronym || group.name.substring(0, 2)}
+                                                </span>
+                                            )}
+                                        </div>
+                                        <Badge variant="secondary" className="flex items-center gap-1">
+                                            <Users className="h-3 w-3" />
+                                            {group.memberCount}
+                                        </Badge>
                                     </div>
-                                    <Badge variant="secondary" className="flex items-center gap-1">
-                                        <Users className="h-3 w-3" />
-                                        {group.memberCount}
-                                    </Badge>
-                                </div>
-                            </CardHeader>
-                            <CardContent>
-                                <CardTitle className="text-lg group-hover:text-primary transition-colors line-clamp-2">
-                                    {group.name}
-                                </CardTitle>
-                                <p className="text-sm text-muted-foreground mt-2">
-                                    {group.memberCount} membre{group.memberCount > 1 ? 's' : ''} actif{group.memberCount > 1 ? 's' : ''}
-                                </p>
-                            </CardContent>
-                        </Card>
-                    </Link>
-                ))}
+                                </CardHeader>
+                                <CardContent>
+                                    <CardTitle className="text-lg group-hover:text-primary transition-colors line-clamp-2">
+                                        {group.name}
+                                    </CardTitle>
+                                    <p className="text-sm text-muted-foreground mt-2">
+                                        {group.memberCount} membre{group.memberCount > 1 ? 's' : ''} actif{group.memberCount > 1 ? 's' : ''}
+                                    </p>
+                                </CardContent>
+                            </Card>
+                        </Link>
+                    );
+                })}
             </div>
 
             {groups.length === 0 && (
