@@ -53,6 +53,7 @@
     ".npm",
     ".expo",
     ".cursor",
-    ".antigravity"
+    ".antigravity",
+    "scripts"
   ]
 }

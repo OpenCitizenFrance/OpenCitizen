@@ -13,40 +13,53 @@ model User {
   email         String?   @unique
   emailVerified DateTime?
   image         String?
-  accounts      Account[]
-  sessions      Session[]
-  
+  password      String? // Hashed password for email/password auth
+
+  // Profile fields
+  bio       String?  @db.Text
+  interests String[] // Array of topic interests
+
+  accounts Account[]
+  sessions Session[]
+
   // Custom fields
   constituencyCode String? // e.g. "75-01"
   followedDeputies Deputy[]
-  bookmarkedLaws   Law[]
-  
+  followedGroups   Group[]
+  bookmarkedLaws   LegislativeDossier[]
+  comments         Comment[]
+
   // Causes
-  createdCauses    Cause[]           @relation("CreatedCauses")
-  joinedCauses     CauseMember[]
+  createdCauses     Cause[]            @relation("CreatedCauses")
+  joinedCauses      CauseMember[]
   actionCompletions ActionCompletion[]
-  
+
   // Preferences
-  alertPreference  AlertPreference?
-  subscription     Subscription?
+  alertPreference AlertPreference?
+  subscription    Subscription?
+
+  // Social
+  conversations ConversationParticipant[]
+  messages      Message[]
+  feedPosts     FeedPost[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
 
 model Account {
-  id                 String  @id @default(cuid())
-  userId             String
-  type               String
-  provider           String
-  providerAccountId  String
-  refresh_token      String? @db.Text
-  access_token       String? @db.Text
-  expires_at         Int?
-  token_type         String?
-  scope              String?
-  id_token           String? @db.Text
-  session_state      String?
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -70,73 +83,234 @@ model VerificationToken {
 }
 
 model Deputy {
-  uid         String   @id // PA...
-  firstName   String
-  lastName    String
-  slug        String   @unique
-  imageUrl    String?
-  
+  uid       String  @id // PA...
+  firstName String
+  lastName  String
+  slug      String  @unique
+  imageUrl  String?
+
+  // US-DB-001: Identity fields
+  civilite       String?   // M. / Mme
+  dateNaissance  DateTime?
+  villeNaissance String?
+  email          String?
+
+  // US-ETL-005: HATVP transparency data
+  hatvpData Json? // { participationsFinancieres: [...] }
+
   // Relations
-  mandates       Mandate[]
-  votes          VoteDetail[]
-  amendments     Amendment[]
-  followedBy     User[]
+  mandates   Mandate[]
+  votes      VoteDetail[]
+  amendments Amendment[]
+  comments   Comment[]
+  authoredDossiers LegislativeDossier[] @relation("AuthoredDossiers")
+
+  // Inverse relations
+  followedBy       User[]
   targetedByCauses CauseDeputy[]
 
+  // Geographic fields
+  regionName     String?
+  departmentName String?
+  departmentCode String?
+  circonscription String? // e.g., "Paris (1ère)"
+
   @@index([lastName])
+  @@index([regionName])
+  @@index([departmentName])
+  @@index([departmentCode])
+}
+
+// US-DB-002: Political position enum
+enum PoliticalPosition {
+  MAJORITE
+  OPPOSITION
+  MINORITAIRE
 }
 
 model Group {
-  uid         String   @id // PO...
-  name        String
-  acronym     String?
-  colorCode   String?
-  
-  mandates    Mandate[]
+  uid       String    @id // PO...
+  name      String
+  acronym   String?
+  colorCode String?
+  type       GroupType @default(GP)
+  codeType   String?   // COMPER, GP, CNPS, etc from AMO
+  isMajority Boolean   @default(false)
+  position   PoliticalPosition @default(MINORITAIRE) // US-DB-002
+  logoUrl    String?
+
+  mandates   Mandate[]
+  amendments Amendment[]
+  dossiers   LegislativeDossier[] // Dossiers where this is the primary commission
+
+  // Inverse relations
+  followedBy User[]
+}
+
+enum GroupType {
+  GP
+  COMPER
+  CNPS
+  AUTRE
 }
 
 model Mandate {
-  uid         String   @id // PM...
-  startDate   DateTime
-  endDate     DateTime?
-  
-  deputyId    String
-  deputy      Deputy   @relation(fields: [deputyId], references: [uid])
-  
-  groupId     String?
-  group       Group?   @relation(fields: [groupId], references: [uid])
-  
-  organId     String? // If not a group (e.g. commission)
-  
+  uid       String    @id // PM...
+  startDate DateTime
+  endDate   DateTime?
+
+  deputyId String
+  deputy   Deputy @relation(fields: [deputyId], references: [uid])
+
+  groupId String?
+  group   Group?  @relation(fields: [groupId], references: [uid])
+
+  organId String? // If not a group (e.g. commission)
+
   @@index([deputyId])
   @@index([groupId])
 }
 
-model Law {
-  uid         String   @id // Dossier ID
-  title       String
-  status      String?
-  
+// ============================================
+// DOSSIERS LÉGISLATIFS
+// ============================================
+
+model LegislativeDossier {
+  uid          String        @id // Dossier ID (DLR5L17NXXXXX format)
+  title        String
+  title_parsed String?       // Short title
+  type         DossierType   @default(PROJET_LOI)
+  status       DossierStatus @default(EN_COURS)
+  legislature  Int           @default(17) // US-DB-004: Legislature number
+
+  authorId String?
+  author   Deputy? @relation("AuthoredDossiers", fields: [authorId], references: [uid])
+
+  // Mapping to primary commission
+  commissionId String?
+  commission   Group?  @relation(fields: [commissionId], references: [uid])
+
+  stages           LegislativeStage[]
   amendments       Amendment[]
   votes            Vote[]
   bookmarkedBy     User[]
-  targetedByCauses CauseLaw[]
+  targetedByCauses CauseDossier[]
+  comments         Comment[]
+  textMappings     TextDossierMapping[]  // Texts that belong to this dossier
+}
+
+// Maps text UIDs (PRJL/PION) to their parent dossier (DLR)
+// This allows looking up the dossier title for amendments
+model TextDossierMapping {
+  textUid   String @id  // e.g., PRJLANR5L17B1906, PIONANR5L17B0419
+  dossierId String      // e.g., DLR5L17N52428
+  dossier   LegislativeDossier @relation(fields: [dossierId], references: [uid])
+  
+  @@index([dossierId])
+}
+
+model LegislativeStage {
+  id          String   @id @default(cuid())
+  dossierId   String
+  dossier     LegislativeDossier @relation(fields: [dossierId], references: [uid], onDelete: Cascade)
+  
+  date        DateTime?
+  stageType   StageType
+  chamber     Chamber?
+  stageOrder  Int      @default(0)
+  organName   String?
+  
+  // Native labels from AN JSON (libelleActe)
+  label       String?   // libelleActe.nomCanonique - e.g., "Travaux de la commission saisie au fond"
+  labelShort  String?   // libelleActe.libelleCourt
+  codeActe    String?   // e.g., "AN1-COM-FOND"
+  
+  texts       LegislativeText[]
+  
+  @@index([dossierId])
+  @@index([organName])
+}
+
+model LegislativeText {
+  uid         String   @id // The text ID, e.g., PRJLANR5L16B1440
+  title       String?  // "Projet de loi..."
+  numTexte    String?  // "1440"
+  
+  stageId     String
+  stage       LegislativeStage @relation(fields: [stageId], references: [id], onDelete: Cascade)
+  
+  // Content details
+  expose      String?  @db.Text
+  articles    Json?    // [{ "number": "Article 1", "content": "...", "expose": "..." }]
+  fullContent String?  @db.Text
+  
+  // US-DB-005: Vector embeddings for RAG
+  embeddings  ArticleEmbedding[]
+  
+  @@index([stageId])
+}
+
+// US-DB-005: Vector content for RAG search
+// Note: pgvector extension and HNSW index require raw SQL migration
+model ArticleEmbedding {
+  id        String   @id @default(cuid())
+  textId    String
+  text      LegislativeText @relation(fields: [textId], references: [uid], onDelete: Cascade)
+  
+  chunkIndex Int      @default(0)  // For long texts split into chunks
+  content    String   @db.Text     // The text chunk for this embedding
+  // embedding  Unsupported("vector(1024)")  // Requires pgvector - add via SQL migration
+  
+  createdAt DateTime @default(now())
+  
+  @@index([textId])
+}
+
+enum DossierType {
+  PROJET_LOI
+  PROJET_LOI_FIN
+  PROJET_LOI_ORG
+  PROPOSITION_LOI
+}
+
+enum DossierStatus {
+  EN_COURS
+  ADOPTE
+  REJETE
+  PROMULGUE
+  RETIRE
+}
+
+enum StageType {
+  DEPOT
+  COMMISSION_FOND
+  COMMISSION_AVIS
+  SEANCE_PUBLIQUE
+  CMP
+  LECTURE_DEFINITIVE
+  CONSEIL_CONSTIT
+  PROMULGATION
+}
+
+enum Chamber {
+  ASSEMBLEE_NATIONALE
+  SENAT
 }
 
 model Vote {
-  uid         String   @id // Scrutin ID
-  date        DateTime
-  title       String
-  voteType    String?  // Solennel, Public
-  result      String?  // Adopté, Rejeté
-  
-  totalPour   Int      @default(0)
-  totalContre Int      @default(0)
-  totalAbst   Int      @default(0)
-  
-  lawId       String?
-  law         Law?     @relation(fields: [lawId], references: [uid])
-  
+  uid      String   @id // Scrutin ID
+  date     DateTime
+  title    String
+  voteType String? // Solennel, Public
+  result   String? // Adopté, Rejeté
+
+  totalPour   Int @default(0)
+  totalContre Int @default(0)
+  totalAbst   Int @default(0)
+
+  lawId String?
+  law   LegislativeDossier?    @relation(fields: [lawId], references: [uid])
+
   voteDetails VoteDetail[]
 }
 
@@ -148,31 +322,36 @@ enum Position {
 }
 
 model VoteDetail {
-  id          String   @id @default(cuid())
-  position    Position
-  
-  voteId      String
-  vote        Vote     @relation(fields: [voteId], references: [uid])
-  
-  deputyId    String
-  deputy      Deputy   @relation(fields: [deputyId], references: [uid])
-  
+  id       String   @id @default(cuid())
+  position Position
+
+  voteId String
+  vote   Vote   @relation(fields: [voteId], references: [uid])
+
+  deputyId String
+  deputy   Deputy @relation(fields: [deputyId], references: [uid])
+
   @@unique([voteId, deputyId])
 }
 
 model Amendment {
-  uid         String   @id
-  content     String   @db.Text
-  expose      String?  @db.Text
-  
-  aiSummary   Json?    // Structured summary
-  status      String?
-  
-  lawId       String?
-  law         Law?     @relation(fields: [lawId], references: [uid])
-  
-  authorId    String
-  author      Deputy   @relation(fields: [authorId], references: [uid])
+  uid     String  @id
+  content String  @db.Text
+  expose  String? @db.Text
+
+  aiSummary Json? // Structured summary
+  status    String?
+
+  lawId String?
+  law   LegislativeDossier?    @relation(fields: [lawId], references: [uid])
+
+  authorId String
+  author   Deputy @relation(fields: [authorId], references: [uid])
+
+  groupId String?
+  group   Group?  @relation(fields: [groupId], references: [uid])
+
+  @@index([authorId])
 }
 
 // ============================================
@@ -186,27 +365,32 @@ model Cause {
   slug        String      @unique
   imageUrl    String?
   status      CauseStatus @default(ACTIVE)
-  
+
   // Créateur
-  creatorId   String
-  creator     User        @relation("CreatedCauses", fields: [creatorId], references: [id])
-  
+  creatorId String
+  creator   User   @relation("CreatedCauses", fields: [creatorId], references: [id])
+
   // Membres (many-to-many)
-  members     CauseMember[]
-  
+  members CauseMember[]
+
   // Cibles
   targetDeputies CauseDeputy[]
-  targetLaws     CauseLaw[]
-  
+  targetDossiers CauseDossier[]
+  comments       Comment[]
+
   // Actions
-  actions     CauseAction[]
-  
+  actions CauseAction[]
+
   // Métriques
-  memberCount Int         @default(0)
-  
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
-  
+  memberCount Int @default(0)
+
+  // Social
+  conversation Conversation?
+  feedPosts    FeedPost[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
   @@index([status])
   @@index([creatorId])
 }
@@ -220,52 +404,52 @@ enum CauseStatus {
 
 // Junction table for Cause members
 model CauseMember {
-  id        String   @id @default(cuid())
-  causeId   String
-  cause     Cause    @relation(fields: [causeId], references: [id], onDelete: Cascade)
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  joinedAt  DateTime @default(now())
-  
+  id       String   @id @default(cuid())
+  causeId  String
+  cause    Cause    @relation(fields: [causeId], references: [id], onDelete: Cascade)
+  userId   String
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  joinedAt DateTime @default(now())
+
   @@unique([causeId, userId])
 }
 
 // Junction table for Cause target deputies
 model CauseDeputy {
-  id        String @id @default(cuid())
-  causeId   String
-  cause     Cause  @relation(fields: [causeId], references: [id], onDelete: Cascade)
-  deputyId  String
-  deputy    Deputy @relation(fields: [deputyId], references: [uid])
-  
+  id       String @id @default(cuid())
+  causeId  String
+  cause    Cause  @relation(fields: [causeId], references: [id], onDelete: Cascade)
+  deputyId String
+  deputy   Deputy @relation(fields: [deputyId], references: [uid])
+
   @@unique([causeId, deputyId])
 }
 
-// Junction table for Cause target laws
-model CauseLaw {
-  id      String @id @default(cuid())
-  causeId String
-  cause   Cause  @relation(fields: [causeId], references: [id], onDelete: Cascade)
-  lawId   String
-  law     Law    @relation(fields: [lawId], references: [uid])
-  
-  @@unique([causeId, lawId])
+// Junction table for Cause target dossiers
+model CauseDossier {
+  id        String          @id @default(cuid())
+  causeId   String
+  cause     Cause           @relation(fields: [causeId], references: [id], onDelete: Cascade)
+  dossierId String
+  dossier   LegislativeDossier @relation(fields: [dossierId], references: [uid])
+
+  @@unique([causeId, dossierId])
 }
 
 model CauseAction {
-  id          String     @id @default(cuid())
-  causeId     String
-  cause       Cause      @relation(fields: [causeId], references: [id], onDelete: Cascade)
-  
+  id      String @id @default(cuid())
+  causeId String
+  cause   Cause  @relation(fields: [causeId], references: [id], onDelete: Cascade)
+
   type        ActionType
   title       String
   description String?    @db.Text
   targetDate  DateTime?
-  
+
   // Tracking completions
   completions ActionCompletion[]
-  
-  createdAt   DateTime   @default(now())
+
+  createdAt DateTime @default(now())
 }
 
 enum ActionType {
@@ -277,13 +461,13 @@ enum ActionType {
 }
 
 model ActionCompletion {
-  id        String      @id @default(cuid())
-  actionId  String
-  action    CauseAction @relation(fields: [actionId], references: [id], onDelete: Cascade)
-  userId    String
-  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  completedAt DateTime  @default(now())
-  
+  id          String      @id @default(cuid())
+  actionId    String
+  action      CauseAction @relation(fields: [actionId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  completedAt DateTime    @default(now())
+
   @@unique([actionId, userId])
 }
 
@@ -292,19 +476,19 @@ model ActionCompletion {
 // ============================================
 
 model AlertPreference {
-  id        String  @id @default(cuid())
-  userId    String  @unique
-  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   // Types d'alertes
   newVoteByFollowed Boolean @default(true)
   newAmendment      Boolean @default(false)
   causeUpdate       Boolean @default(true)
   weeklyDigest      Boolean @default(true)
-  
+
   // Canaux
-  emailEnabled      Boolean @default(true)
-  
+  emailEnabled Boolean @default(true)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -314,20 +498,20 @@ model AlertPreference {
 // ============================================
 
 model Subscription {
-  id        String           @id @default(cuid())
-  userId    String           @unique
-  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  
-  tier      SubscriptionTier @default(FREE)
-  
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  tier SubscriptionTier @default(FREE)
+
   // Stripe (future)
   stripeCustomerId     String?
   stripeSubscriptionId String?
-  
+
   // Limites
-  aiCallsToday    Int      @default(0)
-  aiCallsResetAt  DateTime @default(now())
-  
+  aiCallsToday   Int      @default(0)
+  aiCallsResetAt DateTime @default(now())
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -337,3 +521,106 @@ enum SubscriptionTier {
   PREMIUM
 }
 
+// ============================================
+// SOCIAL & CHAT SYSTEM
+// ============================================
+
+model Conversation {
+  id   String           @id @default(cuid())
+  type ConversationType
+  name String? // For Group chats
+
+  // Relations
+  participants ConversationParticipant[]
+  messages     Message[]
+
+  // For Cause-based chat
+  causeId String? @unique
+  cause   Cause?  @relation(fields: [causeId], references: [id])
+
+  lastMessageAt DateTime @default(now())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+enum ConversationType {
+  DM
+  GROUP
+  CAUSE
+}
+
+model ConversationParticipant {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  role       ParticipantRole @default(MEMBER)
+  joinedAt   DateTime        @default(now())
+  lastReadAt DateTime? // For unread counts
+
+  @@unique([conversationId, userId])
+}
+
+enum ParticipantRole {
+  MEMBER
+  ADMIN
+}
+
+model Message {
+  id      String @id @default(cuid())
+  content String @db.Text
+
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  authorId String
+  author   User   @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model FeedPost {
+  id      String  @id @default(cuid())
+  title   String?
+  content String  @db.Text
+
+  causeId String
+  cause   Cause  @relation(fields: [causeId], references: [id], onDelete: Cascade)
+
+  authorId String
+  author   User   @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  // Interactions
+  likes Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([causeId])
+}
+
+// Comments on entities (Laws, Deputies, FeedPosts?)
+model Comment {
+  id      String @id @default(cuid())
+  content String @db.Text
+
+  authorId String
+  author   User   @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  // Targets (Polymorphic-ish via nullable FKs)
+  lawId     String?
+  law       LegislativeDossier? @relation(fields: [lawId], references: [uid])
+
+  deputyId String?
+  deputy   Deputy? @relation(fields: [deputyId], references: [uid])
+
+  causeId String?
+  cause   Cause?  @relation(fields: [causeId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
