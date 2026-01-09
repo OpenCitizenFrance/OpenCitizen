@@ -1,4 +1,4 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, DossierType, DossierStatus } from '@prisma/client';
 import AdmZip from 'adm-zip';
 import { Readable } from 'stream';
 import { finished } from 'stream/promises';
@@ -7,7 +7,7 @@ import path from 'path';
 
 const prisma = new PrismaClient();
 
-// URLs for the 17th Legislature (hardcoded as per spec)
+// URLs for the 17th Legislature
 const URLS = {
     AMO: 'http://data.assemblee-nationale.fr/static/openData/repository/17/amo/tous_acteurs_mandats_organes_xi_legislature/AMO30_tous_acteurs_tous_mandats_tous_organes_historique.json.zip',
     SCRUTINS: 'http://data.assemblee-nationale.fr/static/openData/repository/17/loi/scrutins/Scrutins.json.zip',
@@ -17,164 +17,192 @@ const URLS = {
 const TEMP_DIR = path.join(process.cwd(), 'temp_seed');
 
 async function downloadFile(url: string, dest: string) {
+    if (fs.existsSync(dest)) {
+        console.log(`Using existing file ${dest}`);
+        return;
+    }
+    console.log(`Downloading from ${url}...`);
     const res = await fetch(url);
     if (!res.body) throw new Error(`Failed to download ${url}`);
-
     const fileStream = fs.createWriteStream(dest);
     await finished(Readable.fromWeb(res.body as any).pipe(fileStream));
 }
 
-async function ensureTempDir() {
-    if (!fs.existsSync(TEMP_DIR)) {
-        fs.mkdirSync(TEMP_DIR);
-    }
+function cleanHtml(html: string | null | undefined): string {
+    if (!html) return "";
+    let text = html.replace(/<[^>]*>/g, " ");
+    text = text.replace(/&#x([0-9A-Fa-f]+);/g, (_, hex) => {
+        try { return String.fromCharCode(parseInt(hex, 16)); } catch (e) { return ""; }
+    });
+    text = text.replace(/&#([0-9]+);/g, (_, dec) => {
+        try { return String.fromCharCode(parseInt(dec, 10)); } catch (e) { return ""; }
+    });
+    const entities: Record<string, string> = {
+        "&nbsp;": " ", "&#160;": " ", "&amp;": "&", "&lt;": "<", "&gt;": ">",
+        "&quot;": '"', "&apos;": "'", "&laquo;": "«", "&raquo;": "»"
+    };
+    Object.entries(entities).forEach(([entity, char]) => { text = text.replaceAll(entity, char); });
+    return text.replace(/\s+/g, " ").trim();
 }
 
-async function cleanTempDir() {
-    if (fs.existsSync(TEMP_DIR)) {
-        fs.rmSync(TEMP_DIR, { recursive: true, force: true });
+function getText(val: any): string | null {
+    if (!val) return null;
+    let text = "";
+    if (typeof val === 'string') text = val;
+    else if (typeof val === 'object') {
+        if (val['#text']) text = val['#text'];
+        else if (val.libelle) text = getText(val.libelle) || "";
+        else text = JSON.stringify(val);
+    } else {
+        text = String(val);
     }
+    return cleanHtml(text);
 }
 
 async function main() {
-    console.log('🌱 Starting seed...');
-    await ensureTempDir();
+    console.log('🌱 Starting Optimized Seed...');
+    if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 
     try {
-        // 1. Process AMO (Acteurs, Mandats, Organes)
-        console.log('⬇️ Downloading AMO data...');
+        // 1. AMO
+        console.log('⬇️ Processing AMO data...');
         const amoZipPath = path.join(TEMP_DIR, 'amo.zip');
         await downloadFile(URLS.AMO, amoZipPath);
-
         const amoZip = new AdmZip(amoZipPath);
         const amoEntries = amoZip.getEntries();
-        console.log(`Found ${amoEntries.length} entries in AMO zip.`);
-        if (amoEntries.length > 0) {
-            console.log('Sample entries:', amoEntries.slice(0, 5).map(e => e.entryName));
-        }
 
-        console.log('📦 Processing Organs...');
-        // Finding Organes file
-        // The structure inside zip is complex, usually hierarchical. We iterate all entries.
+        const groups: any[] = [];
+        const deputies: any[] = [];
+        const mandates: any[] = [];
+
+        console.log('📦 Collecting Groups...');
         for (const entry of amoEntries) {
             if (entry.entryName.includes('organe/PO') && entry.name.endsWith('.json')) {
-                const content = JSON.parse(entry.getData().toString('utf8'));
-                const org = content.organe;
-
-                // We focus on Groups (GP) and Commissions (COMPER) mainly, but let's ingest Groups first
-                if (org.codeType === 'GP') {
-                    await prisma.group.upsert({
-                        where: { uid: org.uid },
-                        update: {
-                            name: org.libelle,
-                            acronym: org.libelleAbrege,
-                            colorCode: org.couleurAssociee
-                        },
-                        create: {
+                try {
+                    const org = JSON.parse(entry.getData().toString('utf8')).organe;
+                    // Ingest all organs, not just groups, to have their names available
+                    if (['GP', 'COMPER'].includes(org.codeType)) {
+                        groups.push({
                             uid: org.uid,
                             name: org.libelle,
-                            acronym: org.libelleAbrege,
-                            colorCode: org.couleurAssociee
-                        }
-                    });
-                }
+                            acronym: org.libelleAbrege || null,
+                            colorCode: org.couleurAssociee || null,
+                            type: org.codeType === 'GP' ? 'GP' : 'COMPER'
+                        });
+                    }
+                } catch (e) { }
             }
         }
+        await prisma.group.createMany({ data: groups, skipDuplicates: true });
 
-        console.log('📦 Processing Actors & Mandates...');
-        let deputyCount = 0;
+        console.log('📦 Collecting Deputies & Mandates...');
         for (const entry of amoEntries) {
-            if (entry.entryName.includes('json/acteur/PA') && entry.name.endsWith('.json')) {
+            if (entry.entryName.includes('acteur/PA') && entry.name.endsWith('.json')) {
                 try {
-                    const content = JSON.parse(entry.getData().toString('utf8'));
-                    const actor = content.acteur;
-
-                    // Handle different UID formats
+                    const actor = JSON.parse(entry.getData().toString('utf8')).acteur;
                     const uid = typeof actor.uid === 'object' ? actor.uid['#text'] : actor.uid;
-                    if (!uid || !uid.startsWith('PA')) continue;
+                    if (!uid?.startsWith('PA')) continue;
 
-                    const etatCivil = actor.etatCivil;
-                    if (!etatCivil) continue;
+                    const mandats = actor.mandats?.mandat;
+                    const mandatArray = Array.isArray(mandats) ? mandats : (mandats ? [mandats] : []);
+                    if (!mandatArray.some((m: any) => m.legislature === '17')) continue;
 
-                    // Try both 'ident' and 'identite' paths
-                    const identite = etatCivil.ident || etatCivil.identite;
-                    if (!identite) continue;
-
+                    const identite = actor.etatCivil.ident || actor.etatCivil.identite;
                     const firstName = identite.prenom || '';
                     const lastName = identite.nom || '';
+                    const slug = `${firstName}-${lastName}`.toLowerCase().replace(/ /g, '-').replace(/[^a-z0-9-]/g, '') + '-' + uid;
 
-                    if (!firstName || !lastName) continue;
+                    // US-DB-001: Extract identity fields
+                    const etatCivil = actor.etatCivil;
+                    const civilite = etatCivil?.ident?.civ || etatCivil?.identite?.civ || null;
+                    const dateNaissanceStr = etatCivil?.infoNaissance?.dateNais;
+                    const dateNaissance = dateNaissanceStr ? new Date(dateNaissanceStr) : null;
+                    const villeNaissance = getText(etatCivil?.infoNaissance?.villeNais) || null;
 
-                    const slug = `${firstName}-${lastName}`.toLowerCase().replace(/ /g, '-').replace(/[^a-z0-9-]/g, '');
-                    const imageUrl = `https://www.assemblee-nationale.fr/dyn/deputes/${uid}/image`;
-
-                    await prisma.deputy.upsert({
-                        where: { uid: uid },
-                        update: { firstName, lastName, imageUrl },
-                        create: {
-                            uid,
-                            firstName,
-                            lastName,
-                            slug: slug + '-' + uid,
-                            imageUrl
-                        }
-                    });
-                    deputyCount++;
-
-                    // Process Mandates
-                    const mandats = actor.mandats?.mandat;
-                    if (mandats) {
-                        const mandatArray = Array.isArray(mandats) ? mandats : [mandats];
-                        for (const m of mandatArray) {
-                            if (m.typeOrgane === 'GP' || m.typeOrgane === 'COMPER') {
-                                try {
-                                    const organId = m.organes?.organeRef || m.organeRef;
-                                    if (!organId) continue;
-
-                                    const startDate = new Date(m.dateDebut);
-                                    const endDate = m.dateFin ? new Date(m.dateFin) : null;
-
-                                    await prisma.mandate.upsert({
-                                        where: { uid: m.uid },
-                                        update: {},
-                                        create: {
-                                            uid: m.uid,
-                                            startDate,
-                                            endDate,
-                                            deputyId: uid,
-                                            groupId: m.typeOrgane === 'GP' ? organId : null,
-                                            organId: organId
-                                        }
-                                    });
-                                } catch (e) { /* skip */ }
+                    // Extract email from adresses
+                    let email = null;
+                    const adresses = actor.adresses?.adresse;
+                    const adresseArray = Array.isArray(adresses) ? adresses : (adresses ? [adresses] : []);
+                    for (const addr of adresseArray) {
+                        if (addr.typeLibelle === 'Mél' || addr.type === 'Mél') {
+                            const valElec = addr.valElec || addr.adresseElectronique;
+                            if (valElec?.includes('@assemblee-nationale.fr')) {
+                                email = valElec;
+                                break;
+                            } else if (!email && valElec) {
+                                email = valElec;
                             }
                         }
                     }
-                } catch (e) { /* skip malformed */ }
+
+                    let regionName = null;
+                    let departmentName = null;
+                    let departmentCode = null;
+                    let circonscription = null;
+
+                    for (const m of mandatArray) {
+                        if (m.typeOrgane === 'ASSEMBLEE' && m.election?.lieu) {
+                            const lieu = m.election.lieu;
+                            regionName = getText(lieu.region);
+                            departmentName = getText(lieu.departement);
+                            departmentCode = getText(lieu.numDepartement || lieu.departementCode);
+                            // Build circonscription label
+                            const numCirco = getText(lieu.numCirco);
+                            if (departmentName && numCirco) {
+                                circonscription = `${departmentName} (${numCirco}${numCirco === '1' ? 'ère' : 'e'})`;
+                            }
+                        }
+
+                        if (['GP', 'COMPER'].includes(m.typeOrgane)) {
+                            const organId = m.organes?.organeRef || m.organeRef;
+                            mandates.push({
+                                uid: m.uid,
+                                startDate: new Date(m.dateDebut),
+                                endDate: m.dateFin ? new Date(m.dateFin) : null,
+                                deputyId: uid,
+                                groupId: m.typeOrgane === 'GP' ? organId : null,
+                                organId
+                            });
+                        }
+                    }
+
+                    deputies.push({
+                        uid,
+                        firstName,
+                        lastName,
+                        slug,
+                        imageUrl: `https://www.assemblee-nationale.fr/dyn/static/tribun/17/photos/carre/${uid.substring(2)}.jpg`,
+                        // US-DB-001: Identity fields
+                        civilite,
+                        dateNaissance,
+                        villeNaissance,
+                        email,
+                        // Geographic fields
+                        regionName,
+                        departmentName,
+                        departmentCode,
+                        circonscription
+                    });
+                } catch (e) { }
             }
         }
-        console.log(`✅ Processed ${deputyCount} deputies.`);
+        const deputyUids = new Set(deputies.map(d => d.uid));
+        await prisma.deputy.createMany({ data: deputies, skipDuplicates: true });
+        await prisma.mandate.createMany({ data: mandates, skipDuplicates: true });
+        console.log(`✅ Processed ${deputies.length} deputies.`);
 
-        // 2. Process Scrutins (Votes)
-        console.log('⬇️ Downloading Scrutins data...');
+        // 2. Scrutins
+        console.log('⬇️ Processing Scrutins data...');
         const votesZipPath = path.join(TEMP_DIR, 'scrutins.zip');
         await downloadFile(URLS.SCRUTINS, votesZipPath);
-
         const votesZip = new AdmZip(votesZipPath);
         const voteEntries = votesZip.getEntries();
-
-        console.log('🗳️ Processing Votes...');
-        let voteCount = 0;
+        const votes: any[] = [];
         for (const entry of voteEntries) {
             if (entry.name.endsWith('.json')) {
-                const content = JSON.parse(entry.getData().toString('utf8'));
-                const s = content.scrutin;
-
-                // Upsert Vote
-                await prisma.vote.upsert({
-                    where: { uid: s.uid },
-                    update: {},
-                    create: {
+                try {
+                    const s = JSON.parse(entry.getData().toString('utf8')).scrutin;
+                    votes.push({
                         uid: s.uid,
                         date: new Date(s.dateScrutin),
                         title: s.titre,
@@ -183,67 +211,89 @@ async function main() {
                         totalPour: parseInt(s.syntheseVote.decompte.pour),
                         totalContre: parseInt(s.syntheseVote.decompte.contre),
                         totalAbst: parseInt(s.syntheseVote.decompte.abstentions)
-                    }
-                });
-
-                // Process Details (Ventilation)
-                // ventilationVotes -> organe -> groupe -> vote -> decompteVoix
-                // This structure can be nested or arrays.
-
-                const ventilation = s.ventilationVotes?.organe;
-                if (ventilation) {
-                    const groupes = ventilation.groupes?.groupe;
-                    if (groupes) {
-                        const groupeArray = Array.isArray(groupes) ? groupes : [groupes];
-
-                        for (const g of groupeArray) {
-                            const voteBlock = g.vote.decompteVoix;
-
-                            // Helper to process position block
-                            const processPosition = async (block: any, position: 'POUR' | 'CONTRE' | 'ABSTENTION' | 'NON_VOTANT') => {
-                                if (!block) return;
-                                const voteurs = block.votant;
-                                if (!voteurs) return;
-
-                                const voteurArray = Array.isArray(voteurs) ? voteurs : [voteurs];
-                                for (const v of voteurArray) {
-                                    const deputyRef = v.acteurRef;
-                                    // Upsert VoteDetail
-                                    // We need to make sure deputy exists, but we seeded them.
-                                    // Use createMany or individual upserts. 
-                                    // Individual for safety now.
-
-                                    try {
-                                        await prisma.voteDetail.create({
-                                            data: {
-                                                voteId: s.uid,
-                                                deputyId: deputyRef,
-                                                position: position
-                                            }
-                                        });
-                                    } catch (e) {
-                                        // Ignore unique constraint violation if re-running
-                                    }
-                                }
-                            };
-
-                            await processPosition(voteBlock.pour, 'POUR');
-                            await processPosition(voteBlock.contre, 'CONTRE');
-                            await processPosition(voteBlock.abstentions, 'ABSTENTION');
-                            await processPosition(voteBlock.nonVotants, 'NON_VOTANT');
-                        }
-                    }
-                }
-                voteCount++;
-                if (voteCount % 10 === 0) console.log(`Processed ${voteCount} votes...`);
+                    });
+                } catch (e) { }
             }
         }
+        await prisma.vote.createMany({ data: votes, skipDuplicates: true });
+        console.log(`✅ Processed ${votes.length} votes.`);
+
+        // 3. Amendments
+        console.log('⬇️ Processing Amendments data...');
+        const amdtZipPath = path.join(TEMP_DIR, 'amendements.zip');
+        await downloadFile(URLS.AMENDEMENTS, amdtZipPath);
+        const amdtZip = new AdmZip(amdtZipPath);
+        const amdtEntries = amdtZip.getEntries();
+        console.log(`Found ${amdtEntries.length} entries in Amendments zip.`);
+
+        const dossierMap = new Map<string, any>();
+        const amendments: any[] = [];
+        const BATCH_SIZE = 100;
+
+        for (let i = 0; i < amdtEntries.length; i++) {
+            const entry = amdtEntries[i];
+            if (!entry.name.endsWith('.json')) continue;
+            try {
+                const a = JSON.parse(entry.getData().toString('utf8')).amendement;
+                if (!a?.uid) continue;
+
+                let authorId = a.signataires?.auteur?.acteurRef;
+                if (!authorId) {
+                    const cos = a.signataires?.cosignataires?.acteurRef;
+                    authorId = Array.isArray(cos) ? cos[0] : cos;
+                }
+                if (!authorId?.startsWith('PA') || !deputyUids.has(authorId)) continue;
+
+                const lawId = typeof a.texteLegislatifRef === 'string' ? a.texteLegislatifRef : a.texteLegislatifRef?.uid;
+                if (!lawId) continue;
+
+                if (!dossierMap.has(lawId)) {
+                    dossierMap.set(lawId, { uid: lawId, title: a.texteLegislatifRef?.titre || "Inconnu", status: 'EN_COURS' });
+                }
+
+                amendments.push({
+                    uid: a.uid,
+                    content: getText(a.corps?.contenuAuteur?.dispositif) || "Pas de contenu",
+                    expose: getText(a.corps?.contenuAuteur?.exposeSommaire),
+                    status: getText(a.cycleDeVie?.sort || a.sort?.sortEnSeance) || 'En traitement',
+                    lawId: lawId,
+                    authorId: authorId
+                });
+
+                if (amendments.length >= BATCH_SIZE) {
+                    try {
+                        // Upsert dossiers first
+                        for (const d of dossierMap.values()) {
+                            await prisma.legislativeDossier.upsert({ where: { uid: d.uid }, update: {}, create: d });
+                        }
+                        dossierMap.clear();
+
+                        const res = await prisma.amendment.createMany({ data: amendments, skipDuplicates: true });
+                        console.log(`\nInserted ${res.count} amendments (Batch at ${i + 1})`);
+                        amendments.length = 0;
+                    } catch (e: any) {
+                        console.error(`\n❌ Batch failed: ${e.message}`);
+                        amendments.length = 0;
+                    }
+                }
+            } catch (e) { }
+        }
+
+        // Final batch
+        if (dossierMap.size > 0) {
+            for (const d of dossierMap.values()) {
+                await prisma.legislativeDossier.upsert({ where: { uid: d.uid }, update: {}, create: d });
+            }
+        }
+        if (amendments.length > 0) {
+            await prisma.amendment.createMany({ data: amendments, skipDuplicates: true });
+        }
+        console.log('\n✅ All amendments processed.');
 
     } catch (error) {
         console.error('❌ Seed failed:', error);
     } finally {
         await prisma.$disconnect();
-        await cleanTempDir();
         console.log('🏁 Seed completed.');
     }
 }

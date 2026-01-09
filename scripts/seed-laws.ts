@@ -32,13 +32,13 @@ async function main() {
         }
 
         try {
-            await prisma.law.upsert({
+            await prisma.legislativeDossier.upsert({
                 where: { uid: lawId },
                 update: {},
                 create: {
                     uid: lawId,
                     title: vote.title || `Texte législatif ${lawId}`,
-                    status: status
+                    status: status as any
                 }
             });
 
@@ -58,7 +58,7 @@ async function main() {
     console.log(`✅ Created ${lawCount} laws.`);
 
     // Check final count
-    const totalLaws = await prisma.law.count();
+    const totalLaws = await prisma.legislativeDossier.count();
     console.log(`📊 Total laws in DB: ${totalLaws}`);
 }
 
