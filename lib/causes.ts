@@ -49,9 +49,9 @@ export async function getCauseBySlug(slug: string) {
                     deputy: true
                 }
             },
-            targetLaws: {
+            targetDossiers: {
                 include: {
-                    law: true
+                    dossier: true
                 }
             },
             actions: {
@@ -108,7 +108,7 @@ export async function createCause(data: {
     description: string
     creatorId: string
     targetDeputyIds?: string[]
-    targetLawIds?: string[]
+    targetDossierIds?: string[]
 }) {
     const slug = data.title
         .toLowerCase()
@@ -129,8 +129,8 @@ export async function createCause(data: {
             targetDeputies: data.targetDeputyIds ? {
                 create: data.targetDeputyIds.map(id => ({ deputyId: id }))
             } : undefined,
-            targetLaws: data.targetLawIds ? {
-                create: data.targetLawIds.map(id => ({ lawId: id }))
+            targetDossiers: data.targetDossierIds ? {
+                create: data.targetDossierIds.map(id => ({ dossierId: id }))
             } : undefined
         }
     })

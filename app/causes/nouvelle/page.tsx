@@ -7,13 +7,22 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { ArrowLeft, Sparkles, Target, Loader2 } from "lucide-react";
+import { ArrowLeft, Sparkles, Target, Loader2, BookOpen } from "lucide-react";
 import Link from "next/link";
+import { DossierSearch } from "@/components/DossierSearch";
+
+interface SelectedDossier {
+    uid: string;
+    title: string;
+    type: string;
+    status: string;
+}
 
 export default function NouvelleCausePage() {
     const router = useRouter();
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [selectedDossiers, setSelectedDossiers] = useState<SelectedDossier[]>([]);
 
     async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
         e.preventDefault();
@@ -28,7 +37,11 @@ export default function NouvelleCausePage() {
             const res = await fetch("/api/causes", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ title, description }),
+                body: JSON.stringify({
+                    title,
+                    description,
+                    targetDossierIds: selectedDossiers.map(d => d.uid)
+                }),
             });
 
             if (!res.ok) {
@@ -120,6 +133,19 @@ export default function NouvelleCausePage() {
                             <p className="text-xs text-muted-foreground">
                                 Une description détaillée (50-2000 caractères)
                             </p>
+                        </div>
+
+                        {/* Dossier Selector */}
+                        <div className="space-y-2 pt-2 border-t">
+                            <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground mb-3">
+                                <BookOpen className="h-4 w-4" />
+                                Rattacher à des textes législatifs
+                            </div>
+                            <DossierSearch
+                                selectedDossiers={selectedDossiers}
+                                onSelect={(dossier) => setSelectedDossiers(prev => [...prev, dossier])}
+                                onRemove={(uid) => setSelectedDossiers(prev => prev.filter(d => d.uid !== uid))}
+                            />
                         </div>
 
                         <div className="flex items-center gap-4 pt-4">

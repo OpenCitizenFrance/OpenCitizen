@@ -14,7 +14,7 @@ export async function POST(request: NextRequest) {
         }
 
         const body = await request.json();
-        const { title, description, targetDeputyIds, targetLawIds } = body;
+        const { title, description, targetDeputyIds, targetDossierIds } = body;
 
         // Validation
         if (!title || title.length < 10 || title.length > 100) {
@@ -36,7 +36,7 @@ export async function POST(request: NextRequest) {
             description,
             creatorId: session.user.id,
             targetDeputyIds,
-            targetLawIds,
+            targetDossierIds,
         });
 
         return NextResponse.json(cause, { status: 201 });
